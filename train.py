@@ -1,4 +1,7 @@
 import torch
+import torch.nn as nn
+from torch.nn import functional as F
+torch.manual_seed(1337)
 
 with open('input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
@@ -33,7 +36,6 @@ for t in range(block_size):
     context = x[:t+1]
     target = y[t]
 
-torch.manual_seed(1337)
 batch_size = 4 # how many independent sequences will we process in parallel?
 block_size = 8 # what is the maximum context length for predictions?
 
@@ -46,19 +48,41 @@ def get_batch(split):
     return x, y
 
 xb, yb = get_batch('train')
-print('inputs:')
-print(xb.shape)
-print(xb)
-print('targets:')
-print(yb.shape)
-print(yb)
+# print('inputs:')
+# print(xb.shape)
+# print(xb)
+# print('targets:')
+# print(yb.shape)
+# print(yb)
 
-print('----')
+# print('----')
 
-for b in range(batch_size): # batch dimension
-    for t in range(block_size): # time dimension
-        context = xb[b, :t+1]
-        target = yb[b,t]
-        print(f"when input is {context.tolist()} the target: {target}")
+# for b in range(batch_size): # batch dimension
+#     for t in range(block_size): # time dimension
+#         context = xb[b, :t+1]
+#         target = yb[b,t]
+#         print(f"when input is {context.tolist()} the target: {target}")
+
+class BigramLangModel(nn.Module):
+    def __init__(self, vocab_size):
+        super().__init__()
+        # each token directly reads off the logits for next token from lookup table
+        self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
+        
+    def forward(self, idx, targets) :
+        #idx & targets are both (B, T) tensor of ints
+        logits = self.token_embedding_table(idx) #B, T, C
+        
+        B, T, C = logits.shape
+        logits = logits.view(B*T, C)
+        targets = targets.view(B*T)
+        loss = F.cross_entropy(logits, targets)
+        return logits, loss
+    
+m = BigramLangModel(vocab_size)
+logits, loss = m(xb, yb)
+print(logits.shape)
+print(loss)
+
 
 
