@@ -3,6 +3,16 @@ import torch.nn as nn
 from torch.nn import functional as F
 torch.manual_seed(1337)
 
+# hyperparameters
+batch_size = 32 # how many independent sequences will we process in parallel?
+block_size = 8 # what is the maximum context length for predictions?
+max_iters = 3000
+eval_interval = 300
+learning_rate = 1e-2
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+eval_iters = 200
+# ------------
+
 with open('input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
@@ -27,7 +37,6 @@ n = int(0.9*len(data))
 train_data = data[:n]
 val_data = data[n:]
 
-block_size = 8
 train_data[:block_size+1]
 
 x = train_data[:block_size]
@@ -36,32 +45,28 @@ for t in range(block_size):
     context = x[:t+1]
     target = y[t]
 
-batch_size = 4 # how many independent sequences will we process in parallel?
-block_size = 8 # what is the maximum context length for predictions?
-
 def get_batch(split):
     # generate a small batch of data of inputs x and targets y
     data = train_data if split == 'train' else val_data
     ix = torch.randint(len(data) - block_size, (batch_size,))
     x = torch.stack([data[i:i+block_size] for i in ix])
     y = torch.stack([data[i+1:i+block_size+1] for i in ix])
+    x, y = x.to(device), y.to(device)
     return x, y
 
-xb, yb = get_batch('train')
-# print('inputs:')
-# print(xb.shape)
-# print(xb)
-# print('targets:')
-# print(yb.shape)
-# print(yb)
-
-# print('----')
-
-# for b in range(batch_size): # batch dimension
-#     for t in range(block_size): # time dimension
-#         context = xb[b, :t+1]
-#         target = yb[b,t]
-#         print(f"when input is {context.tolist()} the target: {target}")
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for split in ['train', 'val']:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(split)
+            logits, loss = model(X, Y)
+            losses[k] = loss.itemodel()
+        out[split] = losses.mean()
+    model.train()
+    return out
 
 class BigramLangModel(nn.Module):
     def __init__(self, vocab_size):
@@ -105,8 +110,9 @@ class BigramLangModel(nn.Module):
             idx = torch.cat((idx, idxNext), dim=1) # (B, T+1)
         return idx
     
-m = BigramLangModel(vocab_size)
-logits, loss = m(xb, yb)
+model = BigramLangModel(vocab_size)
+m = model.to(device)
+
 
 # print(logits.shape)
 # print(loss)
@@ -123,19 +129,23 @@ logits, loss = m(xb, yb)
 # print(decode(m.generate(idx, max_new_tokens=100)[0].tolist()))
 
 # create a PyTorch optimizer
-optimizer = torch.optim.AdamW(m.parameters(), lr=1e-3)
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
-batch_size = 32
-for steps in range(20000): # increase number of steps for good results... 
-    
+for iter in range(max_iters):
+
+    # every once in a while evaluate the loss on train and val sets
+    if iter % eval_interval == 0 or iter == max_iters - 1:
+        losses = estimate_loss()
+        print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+
     # sample a batch of data
     xb, yb = get_batch('train')
 
     # evaluate the loss
-    logits, loss = m(xb, yb)
+    logits, loss = model(xb, yb)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
     
-print(loss.item())
-print(decode(m.generate(idx = torch.zeros((1, 1), dtype=torch.long), max_new_tokens=500)[0].tolist()))
+context = torch.zeros((1, 1), dtype=torch.long, device=device)
+print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
