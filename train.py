@@ -69,20 +69,73 @@ class BigramLangModel(nn.Module):
         # each token directly reads off the logits for next token from lookup table
         self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
         
-    def forward(self, idx, targets) :
-        #idx & targets are both (B, T) tensor of ints
+    def forward(self, idx, targets=None) :
+        #idx & targets are both (B, T) tensor of integers
+        #B = Batch
+        #T = Time
+        #C = Channel
+        #logits = scores of the next character in the sequence
+        #predicting the next character based on previous character
         logits = self.token_embedding_table(idx) #B, T, C
         
-        B, T, C = logits.shape
-        logits = logits.view(B*T, C)
-        targets = targets.view(B*T)
-        loss = F.cross_entropy(logits, targets)
+        if targets is None:
+            loss = None
+        else:
+            B, T, C = logits.shape
+            logits = logits.view(B*T, C)
+            targets = targets.view(B*T)
+            #the quality of prediction
+            #the logits should be high, other dimensions should be low
+            loss = F.cross_entropy(logits, targets)
+        
         return logits, loss
+    
+    def generate(self, idx, max_new_tokens):
+        # idx is (B, T) array of indices in the current context
+        for _ in range(max_new_tokens):
+            # get the predictions
+            logits, loss = self(idx)
+            # focus only on the last time step
+            logits = logits[:, -1, :] # becomes (B, C)
+            # apply softmax to get probabilities            
+            probs = F.softmax(logits, dim=-1) # (B, C)
+            # sample from the distribution
+            idxNext = torch.multinomial(probs, num_samples=1)
+            # append sampled index to the running sequence
+            idx = torch.cat((idx, idxNext), dim=1) # (B, T+1)
+        return idx
     
 m = BigramLangModel(vocab_size)
 logits, loss = m(xb, yb)
-print(logits.shape)
-print(loss)
 
+# print(logits.shape)
+# print(loss)
 
+#creating a batch: just one, time = 1, holding a 0, datatype = integer
+#0 = new line character
 
+# idx = torch.zeros((1, 1), dtype=torch.long)
+
+#ask for 100 max tokens, it will generate
+#set the list to [0] to unplug the batch dimension
+#one dimension indices
+
+# print(decode(m.generate(idx, max_new_tokens=100)[0].tolist()))
+
+# create a PyTorch optimizer
+optimizer = torch.optim.AdamW(m.parameters(), lr=1e-3)
+
+batch_size = 32
+for steps in range(20000): # increase number of steps for good results... 
+    
+    # sample a batch of data
+    xb, yb = get_batch('train')
+
+    # evaluate the loss
+    logits, loss = m(xb, yb)
+    optimizer.zero_grad(set_to_none=True)
+    loss.backward()
+    optimizer.step()
+    
+print(loss.item())
+print(decode(m.generate(idx = torch.zeros((1, 1), dtype=torch.long), max_new_tokens=500)[0].tolist()))
