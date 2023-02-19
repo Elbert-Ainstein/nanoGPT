@@ -3,15 +3,21 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 # hyperparameters
-batch_size = 32 # how many independent sequences will we process in parallel?
-block_size = 8 # what is the maximum context length for predictions?
-max_iters = 3000
-eval_interval = 300
-learning_rate = 1e-2
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+batch_size = 64 # how many independent sequences will we process in parallel?
+
+# using 256 previous characters to predict the 257th
+block_size = 256 # what is the maximum context length for predictions?
+max_iters = 5000
+eval_interval = 500
+learning_rate = 3e-4
+device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
-n_embd = 32
+n_embd = 192 # number of embedding dimensions
+n_head = 6 # 384/6 = 64 ; every head is a 64-dimensional as a standard
+n_layer = 3 # 6 layers of that
+dropout = 0.2 # every forward/backward pass 20% of intermediate calculations are dropped to zero
 # ------------
+print(torch.cuda.is_available())
 
 torch.manual_seed(1337)
 
@@ -58,6 +64,84 @@ def estimate_loss():
     model.train()
     return out
 
+# 1 head of self attention
+class Head(nn.Module):
+    def __init__(self, head_size):
+        super().__init__()
+        self.key = nn.Linear(n_embd, head_size, bias=False)
+        self.query = nn.Linear(n_embd, head_size, bias=False)
+        self.value = nn.Linear(n_embd, head_size, bias=False)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        B, T, C = x.shape
+        k = self.key(x) #B,T,C
+        q = self.query(x) #B, T, C
+        #computer attention scores "Affinities"
+        wei = q @ k.transpose(-2, -1) * C**-0.5 #[B, T, C] @ [B, C, T] -> [B, T, T] (matrices)
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # {B, T, T}
+        wei = F.softmax(wei, dim = -1) # [B, T, T]
+        wei = self.dropout(wei) # randomly prevent some nodes from communicating
+        #perform the weighted aggregration
+        v = self.value(x) # [B, T, T] @ [B, T, C] -> [B, T, C] (matrices)
+        out = wei @ v
+        return out
+        
+        
+class MultiHeadAttention(nn.Module):
+    #multiple heads of self attention running in parallel
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        # creating multiple heads & run in parallel
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.projection = nn.Linear(num_heads * head_size, n_embd)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        #concatinating over channel dimension (dim)
+        out = torch.cat([h(x) for h in self.heads], dim = -1)
+        out = self.projection(out)
+        return out
+
+class FeedForward(nn.Module):
+    # simple linear layer follow by a non-linearity
+    
+    def __init__(self, n_embd):
+        super().__init__()
+        # applying on a per token level, all tokens do this independently, think independently
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(dropout),
+        )
+    
+    def forward(self, x):
+        return self.net(x)
+
+class Block(nn.Module):
+    # Transformer block: communication followed by computation
+    
+    def __init__(self, n_embd, n_head):
+        #n_embd: embedding dimension, h_head: the num of heads we like
+        super().__init__()
+        head_size = n_embd // n_head
+        self.selfAttentionHead = MultiHeadAttention(n_head, head_size)
+        self.feedForward = FeedForward(n_embd)
+        self.layerNorm1 = nn.LayerNorm(n_embd)
+        self.layerNorm2 = nn.LayerNorm(n_embd)
+        
+    def forward(self, x):
+        # fork off -> computation -> come back
+        x = x + self.selfAttentionHead(self.layerNorm1(x))
+        # fork off -> computation -> come back
+        x = x + self.feedForward(self.layerNorm2(x))
+        # residual connections
+        return x
+        
+
 # super simple bigram model
 class BigramLanguageModel(nn.Module):
 
@@ -66,6 +150,17 @@ class BigramLanguageModel(nn.Module):
         # each token directly reads off the logits for the next token from a lookup table
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
+        # self.selfAttentionHead = MultiHeadAttention(4, n_embd//4) 
+        # i.e. 4 heads of 8-dimentional self attention
+        # self.feedForward = FeedForward(n_embd)
+        #n_embd = 32
+        # self.blocks = nn.Sequential(
+        #     Block(n_embd, n_head = 4),
+        #     Block(n_embd, n_head = 4),
+        #     Block(n_embd, n_head = 4),
+        # )
+        self.blocks = nn.Sequential(*[Block(n_embd, n_head= n_head) for _ in range(n_layer)])
+        self.layerNorm_final = nn.LayerNorm(n_embd)
         self.langModelHead = nn.Linear(n_embd, vocab_size)
 
     def forward(self, idx, targets=None):
@@ -74,6 +169,11 @@ class BigramLanguageModel(nn.Module):
         tokenEmbeddings = self.token_embedding_table(idx) # (B,T,C)
         posEmbedding = self.position_embedding_table(torch.arange(T, device=device)) #  (T, C)
         x = tokenEmbeddings + posEmbedding
+        # x = self.selfAttentionHead(x) 
+        # apply one head of self attention [B, T, C]
+        # x = self.feedForward(x)
+        x = self.blocks(x)
+        x = self.layerNorm_final(x)
         logits = self.langModelHead(x) # (B,T,vocab_size)
 
         if targets is None:
@@ -88,9 +188,12 @@ class BigramLanguageModel(nn.Module):
 
     def generate(self, idx, max_new_tokens):
         # idx is (B, T) array of indices in the current context
+        # if idx > block size, position embedding table is out of scope
         for _ in range(max_new_tokens):
+            #crop idx to the last block_size tokens
+            idx_cond = idx[:, -block_size:]
             # get the predictions
-            logits, loss = self(idx)
+            logits, loss = self(idx_cond)
             # focus only on the last time step
             logits = logits[:, -1, :] # becomes (B, C)
             # apply softmax to get probabilities
@@ -126,3 +229,24 @@ for iter in range(max_iters):
 # generate from the model
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
 print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
+
+# Attention is a communication mechanism. Can be seen as nodes in a directed graph looking at each other and aggregating information with a weighted sum from all nodes that point to them, with data-dependent weights.
+# There is no notion of space. Attention simply acts over a set of vectors. This is why we need to positionally encode tokens.
+# Each example across batch dimension is of course processed completely independently and never "talk" to each other
+# In an "encoder" attention block just delete the single line that does masking with tril, allowing all tokens to communicate. This block here is called a "decoder" attention block because it has triangular masking, and is usually used in autoregressive settings, like language modeling.
+# "self-attention" just means that the keys and values are produced from the same source as queries. In "cross-attention", the queries still get produced from x, but the keys and values come from some other, external source (e.g. an encoder module)
+
+
+# k = torch.randn(B,T,head_size)
+# q = torch.randn(B,T,head_size)
+# wei = q @ k.transpose(-2, -1) * head_size**-0.5
+
+
+# Regularization technique: dropout
+# prevents overfitting
+# Dropout is a concept that every forward & backward pass 
+# shuts down some subset of neurons
+# randomly drops them to 0, and trains without them
+# ends up training an ensemble of subnetworks
+# at this time everything is enabled
+# all subnetworks are merged into one
