@@ -13,3 +13,26 @@ while v2.py contains the full code and more advanced notes.
 - normally the n_embd should be 384 
 - the n_layer should be 6 
 - I have a bad gpu let me be
+
+### Prerequisites
+* Python 3.9
+* Pytorch
+
+### Installation
+1. Clone the repository
+```sh
+git clone https://github.com/Elbert-Ainstein/nanoGPT.git
+```
+2. Change directory into the folder
+```sh
+cd nanoGPT
+```
+3. Run the program
+* For Windows:
+```sh 
+python v2.py
+```
+* For Mac:
+```sh
+python3 v2.py
+```
