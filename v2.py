@@ -12,9 +12,9 @@ eval_interval = 500
 learning_rate = 3e-4
 device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
-n_embd = 192 # number of embedding dimensions
+n_embd = 384 # number of embedding dimensions
 n_head = 6 # 384/6 = 64 ; every head is a 64-dimensional as a standard
-n_layer = 3 # 6 layers of that
+n_layer = 6 # 6 layers of that
 dropout = 0.2 # every forward/backward pass 20% of intermediate calculations are dropped to zero
 # ------------
 print(torch.cuda.is_available())
