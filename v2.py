@@ -10,7 +10,15 @@ block_size = 256 # what is the maximum context length for predictions?
 max_iters = 5000
 eval_interval = 500
 learning_rate = 3e-4
-device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+
+if torch.cuda.is_available():
+    dev = 'cuda:0'
+elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
+    dev = 'mps'
+else:
+    dev = 'cpu'
+print(dev)
+device = dev
 eval_iters = 200
 n_embd = 192 # number of embedding dimensions
 n_head = 6 # 384/6 = 64 ; every head is a 64-dimensional as a standard
