@@ -20,9 +20,9 @@ else:
 print(dev)
 device = dev
 eval_iters = 200
-n_embd = 192 # number of embedding dimensions
+n_embd = 384 # number of embedding dimensions
 n_head = 6 # 384/6 = 64 ; every head is a 64-dimensional as a standard
-n_layer = 3 # 6 layers of that
+n_layer = 6 # 6 layers of that
 dropout = 0.2 # every forward/backward pass 20% of intermediate calculations are dropped to zero
 # ------------
 print(torch.cuda.is_available())
